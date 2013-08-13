@@ -71,7 +71,7 @@ class NutrientDB:
 	
 	def convert_to_documents(self, mongo_client=None, mongo_db=None, mongo_collection=None):		
 		"""Converts the nutrient database into a json document. Optionally inserts into a mongo collection"""	
-
+		new_doc = ""
 		# Iterate through each food item and build a full nutrient json document
 		for food in self.database.execute('''
 				select * from food_des, fd_group where food_des.FdGrp_Cd = fd_group.FdGrp_Cd'''):
@@ -127,7 +127,9 @@ class NutrientDB:
 				# Upsert document into collection 
 				collection.update({'meta.ndb_no': document['meta']['ndb_no']}, document, upsert=True)
 			else:
-				print json.dumps(document)
+				new_doc += json.dumps(document) + ","
+		else:
+			print '{ "food": [' + new_doc + "]}"
 
 	def query_gramweight(self, ndb_no):	
 		'''Query the nutrient db for gram weight info based on the food's unique ndb number'''
@@ -136,7 +138,8 @@ class NutrientDB:
 		return [{
 			'amt': gramweight['Amount'],
 			'unit': gramweight['Msre_Desc'],
-			'g': gramweight['Gm_Wgt']
+			'g': gramweight['Gm_Wgt'],
+			'ndb_no': ndb_no
 		} for gramweight in self.database.execute('''select * from weight where weight.NDB_No = ?''', [ndb_no])]
 
 	def query_footnote(self, ndb_no):	
@@ -197,38 +200,51 @@ class NutrientDB:
 			# Get the sources of nutrient data
 			source_ids = [source['DataSrc_ID'] for source in self.database.execute(''' 
 				select * from datsrcln where NDB_No = ? and Nutr_No = ?''', [ndb_no, nutrient['Nutr_No']])]
+			unit = nutrient['Units'];
+			if(unit == 'g'):
+				units = 'gram'
+			elif(unit == 'mg'):
+				units = 'milligram'
+			elif(unit == 'IU' and nutrient['Tagname'] == 'VITA_IU'):
+				units = 'IU_VitA'
+			elif(unit == 'IU' and nutrient['Tagname'] == 'VITD'):
+				units = 'IU_VitD'
+			else:
+				units = unit
 
 			# Filter out the extra id numbers
-			nutrient_filtered = {
-				'code': nutrient['Nutr_No'],
-				'name': nutrient['NutrDesc'],
-				'abbr': nutrient['Tagname'],
-				'value': nutrient['Nutr_Val'],
-				'units': nutrient['Units'],
-				'meta': {
-					'imputed': nutrient['Ref_NDB_No'],
-					'is_add': nutrient['Add_Nutr_Mark'],
-					'rounded': nutrient['Num_Dec'],
-					'conf': nutrient['CC'],
-					'mod_month': nutrient['AddMod_Date'][0:2],
-					'mod_year': nutrient['AddMod_Date'][3:],
-					'lower_error': nutrient['Low_EB'],
-					'upper_error': nutrient['Up_EB'],
-					'std_error': nutrient['Std_Error'],
-					'data_points': nutrient['Num_Data_Pts'],
-					'minval': nutrient['Min'],
-					'maxval': nutrient['Max'],
-					'degrees_of_freedom': nutrient['DF'],
-					'stat_comments': nutrient['Stat_cmt'],
-					'sources': source_ids,
-					'source_type': nutrient['SrcCd_Desc'],
-					'derivation': nutrient['Deriv_Desc'],
-					'studies': nutrient['Num_Studies']
+			nutrient_filtered = [{
+				nutrient['Nutr_No'] : {
+					'code': nutrient['Nutr_No'],
+					'name': nutrient['NutrDesc'],
+					'abbr': nutrient['Tagname'],
+					'value': nutrient['Nutr_Val'],
+					'units': units,
+					'meta': {
+						'imputed': nutrient['Ref_NDB_No'],
+						'is_add': nutrient['Add_Nutr_Mark'],
+						'rounded': nutrient['Num_Dec'],
+						'conf': nutrient['CC'],
+						'mod_month': nutrient['AddMod_Date'][0:2],
+						'mod_year': nutrient['AddMod_Date'][3:],
+						'lower_error': nutrient['Low_EB'],
+						'upper_error': nutrient['Up_EB'],
+						'std_error': nutrient['Std_Error'],
+						'data_points': nutrient['Num_Data_Pts'],
+						'minval': nutrient['Min'],
+						'maxval': nutrient['Max'],
+						'degrees_of_freedom': nutrient['DF'],
+						'stat_comments': nutrient['Stat_cmt'],
+						'sources': source_ids,
+						'source_type': nutrient['SrcCd_Desc'],
+						'derivation': nutrient['Deriv_Desc'],
+						'studies': nutrient['Num_Studies']
+					}
 				}
-			}
+			}]
 
 			# Add filtered nutrient info to list of nutrients
-			nutrients.append(nutrient_filtered)
+			nutrients.extend(nutrient_filtered)
 
 		# Return all nutrients
 		return nutrients
