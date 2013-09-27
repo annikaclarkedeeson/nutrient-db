@@ -7,6 +7,8 @@ import json
 import sqlite3
 import argparse
 import pymongo
+import codecs
+import re
 
 class NutrientDB:
 	"""Parses USDA flat files and converts them into an sqlite database"""
@@ -69,12 +71,43 @@ class NutrientDB:
 									(NDB_No, Nutr_No, DataSrc_ID);
 									CREATE INDEX datsrcln_NDB_No_idx ON datsrcln (NDB_No)'''
 	
-	def convert_to_documents(self, mongo_client=None, mongo_db=None, mongo_collection=None):		
-		"""Converts the nutrient database into a json document. Optionally inserts into a mongo collection"""	
+	def convert_to_documents(self, batch=None, mongo_client=None, mongo_db=None, mongo_collection=None):	
+		"""Converts the nutrient database into a json document. Optionally inserts into a mongo collection"""
+
+		if(batch):
+			cursor = self.database.execute('''
+				select count(*) from food_des, fd_group where food_des.FdGrp_Cd = fd_group.FdGrp_Cd''')
+			results = cursor.fetchone()
+			result_count = results[0]
+			times = result_count/batch
+
+			for time in range(times):
+				if(time == 0):
+					limit_start = 0
+				else:
+					limit_start = time * batch
+				query = '''select * from food_des, fd_group where food_des.FdGrp_Cd = fd_group.FdGrp_Cd limit '''+str(limit_start)+''','''+str(batch)
+				new_doc = self.query_main(query)
+				new_doc = '{ "food": [' + new_doc + "]}"
+				new_doc = new_doc[:-4] + '}]}'
+				f = open("/Users/annikaclarke/Projects/nutrient-db/files/nutrients"+str(time)+".json", 'w+')
+				f.write(new_doc)
+				f.close()
+		else:
+			query = '''select * from food_des, fd_group where food_des.FdGrp_Cd = fd_group.FdGrp_Cd'''
+			new_doc = self.query_main(query)
+			new_doc = '{ "food": [' + new_doc + "]}"
+			new_doc = new_doc[:-4] + '}]}'
+			f = open("/Users/annikaclarke/Projects/nutrient-db/files/nutrients.json", 'w+')
+			f.write(new_doc)
+			f.close()
+
+	def query_main(self, query):
+		'''Main query'''		
 		new_doc = ""
+
 		# Iterate through each food item and build a full nutrient json document
-		for food in self.database.execute('''
-				select * from food_des, fd_group where food_des.FdGrp_Cd = fd_group.FdGrp_Cd'''):
+		for food in self.database.execute(query):
 
 			# Store unique identifier for the food
 			ndb_no = food['NDB_No']
@@ -116,20 +149,8 @@ class NutrientDB:
 				'footnotes': self.query_footnote(ndb_no),
 				'langual': self.query_langual(ndb_no)
 			}
-
-			# Has user passed info to insert into mongo collection
-			if (mongo_client and mongo_db and mongo_collection):
-				print "Adding to mongo food#: " +  str(document['meta']['ndb_no'])
-
-				# Get refrence to colleciton we want to add the documents to
-				collection = mongo_client[mongo_db][mongo_collection]
-
-				# Upsert document into collection 
-				collection.update({'meta.ndb_no': document['meta']['ndb_no']}, document, upsert=True)
-			else:
-				new_doc += json.dumps(document) + ","
-		else:
-			print '{ "food": [' + new_doc + "]}"
+			new_doc += json.dumps(document) + ","
+		return new_doc
 
 	def query_gramweight(self, ndb_no):	
 		'''Query the nutrient db for gram weight info based on the food's unique ndb number'''
@@ -323,6 +344,7 @@ def main():
 	parser.add_argument('-db', '--database', dest='database', help='The name of the SQLite file to read/write nutrient info. (default: nutrients.db)', default='nutrients.db')
 	parser.add_argument('-f', '--force', dest='force', action='store_true', help='Whether to force refresh of database file from flat file. If database file already exits and has some data in it we skip flat file parsing.')
 	parser.add_argument('-e', '--export', dest='export', action='store_true', help='Converts nutrient data into json documents and outputs to standard out, each document is seperated by a newline.')
+	parser.add_argument('-be', '--batchexport', dest='batchexport', action='store_true', help='Converts nutrient data into json documents, batched by limit', default=250)
 	parser.add_argument('--mhost', dest='mhost', help='Mongo hostname. Defaults to localhost.', default='localhost')
 	parser.add_argument('--mport', dest='mport', help='Mongo port. Defaults to 27017.', default=27017)
 	parser.add_argument('--mdb', dest='mdb', help='Mongo database to connect to.')
@@ -362,6 +384,8 @@ def main():
 	# Export each food item as json document into a mongodb
 	if args['export']:
 		nutrients.convert_to_documents()
+	elif args['batchexport']:
+		nutrients.convert_to_documents(batch=200)
 	elif (args['mhost'] and args['mport'] and args['mdb'] and args['mcoll']):
 		# Export documents to mongo instance
 		nutrients.convert_to_documents(mongo_client=pymongo.MongoClient(args['mhost'], args['mport']), mongo_db=args['mdb'], mongo_collection=args['mcoll'])
